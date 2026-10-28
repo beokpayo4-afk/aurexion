@@ -1,13 +1,15 @@
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
+import { GatewayPayment } from "@/components/shop/GatewayPayment";
+import { ManualPayment } from "@/components/shop/ManualPayment";
 import { Container } from "@/components/ui/Container";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { usePageTitle } from "@/hooks/usePageTitle";
-import { downloadOrderItem, getOrder, listOrderDownloads } from "@/services/shopService";
+import { downloadOrderItem, getOrder, getPaymentConfig, listOrderDownloads } from "@/services/shopService";
 import { formatMoney } from "@/utils/format";
 import { apiErrorMessage } from "@/utils/apiError";
 
@@ -17,7 +19,18 @@ export function OrderSuccessPage() {
   usePageTitle("Order");
   const order = useAsyncData(() => getOrder(orderId), [orderId]);
   const downloads = useAsyncData(() => (orderId ? listOrderDownloads(orderId) : Promise.resolve([])), [orderId]);
+  const paymentConfig = useAsyncData(() => getPaymentConfig(), []);
+  const gateway = Boolean(paymentConfig.data?.enabled);
+  const manualPayment =
+    paymentConfig.data && !gateway && (paymentConfig.data.payment_link || paymentConfig.data.upi_id) ? paymentConfig.data : null;
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const status = order.data?.status;
+  const paid = status === "paid" || status === "fulfilled";
+  const heading = paid ? "Payment successful" : status === "pending" ? "Complete the payment" : "Order confirmation";
+  const onPaid = () => {
+    order.reload();
+    downloads.reload();
+  };
 
   if (!orderId) {
     return (
@@ -29,7 +42,7 @@ export function OrderSuccessPage() {
 
   return (
     <Container className="py-16 sm:py-20">
-      <h1 className="font-display text-5xl">Order confirmation</h1>
+      <h1 className="font-display text-5xl">{heading}</h1>
       {order.loading ? <LoadingState label="Loading order" /> : null}
       {order.error ? <ErrorState message={order.error} onRetry={order.reload} /> : null}
       {order.data ? (
@@ -37,6 +50,11 @@ export function OrderSuccessPage() {
           <p className="text-sm text-ink/75">
             {order.data.order_number} · {order.data.status} · {formatMoney(order.data.total, order.data.currency)}
           </p>
+          {paid ? (
+            <p role="status" className="mt-4 rounded-xl border border-line bg-white p-4 text-sm font-semibold text-ink">
+              Payment of {formatMoney(order.data.total, order.data.currency)} received for order {order.data.order_number}.
+            </p>
+          ) : null}
           {params.get("emailed") === "1" ? (
             <p className="mt-4 text-sm leading-6 text-ink/75">A confirmation email was sent to {order.data.customer_email}.</p>
           ) : (
@@ -61,7 +79,31 @@ export function OrderSuccessPage() {
               ))}
             </ul>
           ) : null}
-          {order.data.status === "pending" ? (
+          {order.data.status === "pending" && gateway ? (
+            <div className="mt-6">
+              <GatewayPayment
+                orderId={order.data.id}
+                orderNumber={order.data.order_number}
+                amount={order.data.total}
+                currency={order.data.currency}
+                customer={{ name: order.data.customer_name, email: order.data.customer_email, phone: order.data.customer_phone }}
+                autoStart={params.get("pay") === "1"}
+                onPaid={onPaid}
+              />
+            </div>
+          ) : null}
+          {order.data.status === "pending" && manualPayment ? (
+            <div className="mt-6">
+              <ManualPayment
+                orderNumber={order.data.order_number}
+                amount={order.data.total}
+                currency={order.data.currency}
+                paymentLink={manualPayment.payment_link}
+                upiId={manualPayment.upi_id}
+              />
+            </div>
+          ) : null}
+          {order.data.status === "pending" && !gateway && !manualPayment && !paymentConfig.loading ? (
             <p className="mt-4 text-sm leading-6 text-ink/75">
               Payment is still pending. A digital download stays locked until the payment gateway confirms success.
             </p>
